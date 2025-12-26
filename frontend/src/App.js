@@ -6,35 +6,13 @@ import './styles/App.css';
 function App() {
   const [isMarkupStarted, setIsMarkupStarted] = useState(false);
   const [mediaItems, setMediaItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    // Initialize or check health on app start
-    checkBackendHealth();
-  }, []);
-
-  const checkBackendHealth = async () => {
-    try {
-      const response = await fetch('/api/health');
-      if (response.ok) {
-        const data = await response.json();
-        console.log('Backend health:', data);
-      } else {
-        setError('Backend not responding');
-      }
-    } catch (err) {
-      console.warn('Backend health check failed:', err);
-      setError('Cannot connect to backend');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleStartMarkup = async () => {
     setLoading(true);
+    setError('');
     try {
-      // Fetch media items from backend
       const response = await fetch('/api/media');
       if (response.ok) {
         const data = await response.json();
@@ -45,7 +23,7 @@ function App() {
       }
     } catch (err) {
       console.error('Error starting markup:', err);
-      setError('Failed to load media items');
+      setError('Failed to load media items. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -59,17 +37,26 @@ function App() {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
-        <p>Loading application...</p>
       </div>
     );
   }
 
-  if (error) {
+  if (error && !isMarkupStarted) {
     return (
-      <div className="error-container">
-        <h2>Error</h2>
-        <p>{error}</p>
-        <button onClick={() => window.location.reload()}>Retry</button>
+      <div className="welcome-container">
+        <div className="welcome-content">
+          <h1 className="welcome-title">Error</h1>
+          <p className="welcome-subtitle" style={{ color: '#dc2626' }}>
+            {error}
+          </p>
+          <button 
+            className="start-button"
+            onClick={() => window.location.reload()}
+            style={{ background: '#dc2626' }}
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }

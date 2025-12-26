@@ -2,19 +2,19 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 import os
-import json
 from datetime import datetime
+
 
 class Database:
     def __init__(self):
         self.db_params = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'database': os.getenv('DB_NAME', 'annotation_db'),
-            'user': os.getenv('DB_USER', 'annotator'),
-            'password': os.getenv('DB_PASSWORD', 'password'),
-            'port': os.getenv('DB_PORT', '5432')
+            "host": os.getenv("DB_HOST", "localhost"),
+            "database": os.getenv("DB_NAME", "markup_db"),
+            "user": os.getenv("DB_USER", "markup_user"),
+            "password": os.getenv("DB_PASSWORD", "markup_pass"),
+            "port": os.getenv("DB_PORT", "5432"),
         }
-    
+
     @contextmanager
     def get_connection(self):
         conn = psycopg2.connect(**self.db_params)
@@ -26,7 +26,7 @@ class Database:
             raise e
         finally:
             conn.close()
-    
+
     @contextmanager
     def get_cursor(self):
         with self.get_connection() as conn:
@@ -36,322 +36,267 @@ class Database:
             finally:
                 cursor.close()
 
+
 def init_database():
-    """Initialize database tables"""
+    """Initialize database with a single markup_results table"""
     db = Database()
-    
+
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        
-        # Create categories table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS categories (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(100) NOT NULL UNIQUE,
-                color VARCHAR(7) DEFAULT '#808080',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Create media table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS media (
+
+        # Create single table for markup results
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS markup_results (
                 id SERIAL PRIMARY KEY,
                 filename VARCHAR(255) NOT NULL,
                 filepath VARCHAR(500) NOT NULL,
-                media_type VARCHAR(10) CHECK (media_type IN ('image', 'video')),
-                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed BOOLEAN DEFAULT FALSE,
-                width INTEGER,
-                height INTEGER,
-                duration FLOAT
-            )
-        ''')
-        
-        # Create annotations table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS annotations (
-                id SERIAL PRIMARY KEY,
-                media_id INTEGER REFERENCES media(id) ON DELETE CASCADE,
-                category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
-                annotation_data JSONB NOT NULL,
+                type VARCHAR(10) NOT NULL CHECK (type IN ('image', 'video')),
+                emotion VARCHAR(20) CHECK (emotion IN (
+                    'angry', 'sad', 'neutral', 'happy', 'disgust', 'surprise', 'fear'
+                )),
+                title VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_id VARCHAR(100) DEFAULT 'default_user',
-                status VARCHAR(20) DEFAULT 'pending' 
-                    CHECK (status IN ('pending', 'skipped', 'completed'))
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        ''')
-        
-        # Create annotation history table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS annotation_history (
-                id SERIAL PRIMARY KEY,
-                annotation_id INTEGER REFERENCES annotations(id) ON DELETE CASCADE,
-                previous_data JSONB,
-                new_data JSONB,
-                action_type VARCHAR(20),
-                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                changed_by VARCHAR(100)
-            )
-        ''')
-        
-        # Insert default categories
-        default_categories = [
-            ('Person', '#FF6B6B'),
-            ('Vehicle', '#4ECDC4'),
-            ('Animal', '#FFD166'),
-            ('Building', '#06D6A0'),
-            ('Nature', '#118AB2')
-        ]
-        
-        for name, color in default_categories:
-            cursor.execute('''
-                INSERT INTO categories (name, color)
-                VALUES (%s, %s)
-                ON CONFLICT (name) DO NOTHING
-            ''', (name, color))
-        
+        """
+        )
+
+        # Create index for faster queries
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_emotion ON markup_results(emotion)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_filename ON markup_results(filename)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_created ON markup_results(created_at DESC)"
+        )
+
         conn.commit()
-    
-    print("✅ Database initialized successfully!")
+
+    print("✅ Database initialized with single markup_results table!")
+
 
 # Database singleton
 db = Database()
 
-class MediaModel:
+
+class MarkupResult:
     @staticmethod
     def get_all():
+        """Get all markup results"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT m.*, 
-                       COALESCE(a.status, 'pending') as annotation_status,
-                       a.id as annotation_id
-                FROM media m
-                LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = 'default_user'
-                ORDER BY m.upload_date DESC
-            ''')
-            return cursor.fetchall()
-    
+            cursor.execute(
+                """
+                SELECT *, 
+                       CASE 
+                           WHEN emotion IS NULL THEN 'pending'
+                           ELSE 'completed'
+                       END as status
+                FROM markup_results 
+                ORDER BY created_at DESC
+            """
+            )
+            results = cursor.fetchall()
+
+            # Convert to dict for easier JSON serialization
+            return [dict(result) for result in results]
+
     @staticmethod
     def get_by_id(media_id):
+        """Get markup result by ID"""
         with db.get_cursor() as cursor:
-            cursor.execute('SELECT * FROM media WHERE id = %s', (media_id,))
-            return cursor.fetchone()
-    
+            cursor.execute(
+                """
+                SELECT *, 
+                       CASE 
+                           WHEN emotion IS NULL THEN 'pending'
+                           ELSE 'completed'
+                       END as status
+                FROM markup_results 
+                WHERE id = %s
+            """,
+                (media_id,),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
     @staticmethod
-    def get_unprocessed(limit=1):
+    def get_by_filename(filename):
+        """Get markup result by filename"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT m.* 
-                FROM media m
-                LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = 'default_user'
-                WHERE a.id IS NULL OR a.status = 'pending'
-                ORDER BY m.upload_date
-                LIMIT %s
-            ''', (limit,))
-            return cursor.fetchall()
-    
+            cursor.execute(
+                """
+                SELECT * FROM markup_results 
+                WHERE filename = %s
+            """,
+                (filename,),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
     @staticmethod
-    def create(filename, filepath, media_type, width=None, height=None, duration=None):
+    def create(filename, filepath, media_type, title=None):
+        """Create new markup result entry"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO media (filename, filepath, media_type, width, height, duration)
-                VALUES (%s, %s, %s, %s, %s, %s)
+            cursor.execute(
+                """
+                INSERT INTO markup_results (filename, filepath, type, title)
+                VALUES (%s, %s, %s, %s)
                 RETURNING *
-            ''', (filename, filepath, media_type, width, height, duration))
-            return cursor.fetchone()
-    
+            """,
+                (filename, filepath, media_type, title or filename),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
     @staticmethod
-    def update_dimensions(media_id, width, height, duration=None):
+    def update_emotion(media_id, emotion):
+        """Update emotion for a markup result"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                UPDATE media
-                SET width = %s, height = %s, duration = %s
+            cursor.execute(
+                """
+                UPDATE markup_results 
+                SET emotion = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 RETURNING *
-            ''', (width, height, duration, media_id))
-            return cursor.fetchone()
+            """,
+                (emotion, media_id),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
 
-class CategoryModel:
     @staticmethod
-    def get_all():
+    def get_next_unannotated(current_id=0):
+        """Get next unannotated media item"""
         with db.get_cursor() as cursor:
-            cursor.execute('SELECT * FROM categories ORDER BY name')
-            return cursor.fetchall()
-    
-    @staticmethod
-    def create(name, color):
-        with db.get_cursor() as cursor:
-            cursor.execute('''
-                INSERT INTO categories (name, color)
-                VALUES (%s, %s)
-                RETURNING *
-            ''', (name, color))
-            return cursor.fetchone()
-    
-    @staticmethod
-    def update(category_id, name, color):
-        with db.get_cursor() as cursor:
-            cursor.execute('''
-                UPDATE categories
-                SET name = %s, color = %s
-                WHERE id = %s
-                RETURNING *
-            ''', (name, color, category_id))
-            return cursor.fetchone()
-    
-    @staticmethod
-    def delete(category_id):
-        with db.get_cursor() as cursor:
-            cursor.execute('DELETE FROM categories WHERE id = %s', (category_id,))
+            if current_id > 0:
+                cursor.execute(
+                    """
+                    SELECT * FROM markup_results 
+                    WHERE id > %s AND emotion IS NULL
+                    ORDER BY id
+                    LIMIT 1
+                """,
+                    (current_id,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT * FROM markup_results 
+                    WHERE emotion IS NULL
+                    ORDER BY id
+                    LIMIT 1
+                """
+                )
 
-class AnnotationModel:
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
     @staticmethod
-    def get_by_media(media_id, user_id='default_user'):
+    def get_previous(current_id):
+        """Get previous media item"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT a.*, c.name as category_name, c.color as category_color
-                FROM annotations a
-                JOIN categories c ON a.category_id = c.id
-                WHERE a.media_id = %s AND a.user_id = %s
-                ORDER BY a.created_at
-            ''', (media_id, user_id))
-            return cursor.fetchall()
-    
-    @staticmethod
-    def create(media_id, category_id, annotation_data, user_id='default_user'):
-        with db.get_cursor() as cursor:
-            # Check if annotation already exists
-            cursor.execute('''
-                SELECT id FROM annotations 
-                WHERE media_id = %s AND user_id = %s
-            ''', (media_id, user_id))
-            existing = cursor.fetchone()
-            
-            if existing:
-                # Update existing annotation
-                cursor.execute('''
-                    UPDATE annotations
-                    SET category_id = %s, annotation_data = %s, 
-                        updated_at = CURRENT_TIMESTAMP, status = 'completed'
-                    WHERE id = %s
-                    RETURNING *
-                ''', (category_id, json.dumps(annotation_data), existing['id']))
-            else:
-                # Create new annotation
-                cursor.execute('''
-                    INSERT INTO annotations (media_id, category_id, annotation_data, user_id, status)
-                    VALUES (%s, %s, %s, %s, 'completed')
-                    RETURNING *
-                ''', (media_id, category_id, json.dumps(annotation_data), user_id))
-            
-            annotation = cursor.fetchone()
-            
-            # Get with category info
-            cursor.execute('''
-                SELECT a.*, c.name as category_name, c.color as category_color
-                FROM annotations a
-                JOIN categories c ON a.category_id = c.id
-                WHERE a.id = %s
-            ''', (annotation['id'],))
-            
-            return cursor.fetchone()
-    
-    @staticmethod
-    def skip(media_id, user_id='default_user'):
-        with db.get_cursor() as cursor:
-            # Check if annotation already exists
-            cursor.execute('''
-                SELECT id FROM annotations 
-                WHERE media_id = %s AND user_id = %s
-            ''', (media_id, user_id))
-            existing = cursor.fetchone()
-            
-            if existing:
-                # Update status to skipped
-                cursor.execute('''
-                    UPDATE annotations
-                    SET status = 'skipped', updated_at = CURRENT_TIMESTAMP
-                    WHERE id = %s
-                    RETURNING *
-                ''', (existing['id'],))
-            else:
-                # Create skipped annotation record
-                cursor.execute('''
-                    INSERT INTO annotations (media_id, user_id, status, annotation_data, category_id)
-                    VALUES (%s, %s, 'skipped', '{}', 1)
-                    RETURNING *
-                ''', (media_id, user_id))
-            
-            return cursor.fetchone()
-    
-    @staticmethod
-    def get_stats(user_id='default_user'):
-        with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT 
-                    COUNT(DISTINCT m.id) as total_media,
-                    COUNT(CASE WHEN a.status = 'completed' THEN 1 END) as completed,
-                    COUNT(CASE WHEN a.status = 'skipped' THEN 1 END) as skipped,
-                    COUNT(CASE WHEN a.status = 'pending' OR a.id IS NULL THEN 1 END) as pending
-                FROM media m
-                LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = %s
-            ''', (user_id,))
-            return cursor.fetchone()
-    
-    @staticmethod
-    def get_next_media(current_id=None, user_id='default_user'):
-        with db.get_cursor() as cursor:
-            if current_id:
-                cursor.execute('''
-                    SELECT m.* 
-                    FROM media m
-                    LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = %s
-                    WHERE m.id > %s AND (a.id IS NULL OR a.status = 'pending')
-                    ORDER BY m.id
-                    LIMIT 1
-                ''', (user_id, current_id))
-            else:
-                cursor.execute('''
-                    SELECT m.* 
-                    FROM media m
-                    LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = %s
-                    WHERE a.id IS NULL OR a.status = 'pending'
-                    ORDER BY m.id
-                    LIMIT 1
-                ''', (user_id,))
-            
-            return cursor.fetchone()
-    
-    @staticmethod
-    def get_previous_media(current_id, user_id='default_user'):
-        with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT m.* 
-                FROM media m
-                LEFT JOIN annotations a ON m.id = a.media_id AND a.user_id = %s
-                WHERE m.id < %s
-                ORDER BY m.id DESC
+            cursor.execute(
+                """
+                SELECT * FROM markup_results 
+                WHERE id < %s
+                ORDER BY id DESC
                 LIMIT 1
-            ''', (user_id, current_id))
-            return cursor.fetchone()
-    
+            """,
+                (current_id,),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
     @staticmethod
-    def delete(annotation_id):
+    def get_stats():
+        """Get statistics about markup results"""
         with db.get_cursor() as cursor:
-            cursor.execute('DELETE FROM annotations WHERE id = %s', (annotation_id,))
-    
+            # Get total count
+            cursor.execute("SELECT COUNT(*) as total FROM markup_results")
+            total = cursor.fetchone()["total"]
+
+            # Get annotated count
+            cursor.execute(
+                "SELECT COUNT(*) as annotated FROM markup_results WHERE emotion IS NOT NULL"
+            )
+            annotated = cursor.fetchone()["annotated"]
+
+            # Get emotion distribution
+            cursor.execute(
+                """
+                SELECT emotion, COUNT(*) as count 
+                FROM markup_results 
+                WHERE emotion IS NOT NULL 
+                GROUP BY emotion 
+                ORDER BY count DESC
+            """
+            )
+            emotion_dist = cursor.fetchall()
+
+            # Convert to dict
+            emotion_summary = {row["emotion"]: row["count"] for row in emotion_dist}
+
+            # Get type distribution
+            cursor.execute(
+                """
+                SELECT type, COUNT(*) as count 
+                FROM markup_results 
+                GROUP BY type 
+                ORDER BY type
+            """
+            )
+            type_dist = cursor.fetchall()
+            type_summary = {row["type"]: row["count"] for row in type_dist}
+
+            return {
+                "total_media": total,
+                "total_annotated": annotated,
+                "pending": total - annotated,
+                "completion_rate": (annotated / total * 100) if total > 0 else 0,
+                "emotion_summary": emotion_summary,
+                "type_summary": type_summary,
+            }
+
     @staticmethod
-    def get_history(media_id):
+    def count():
+        """Count total records"""
         with db.get_cursor() as cursor:
-            cursor.execute('''
-                SELECT h.*, c.name as category_name
-                FROM annotation_history h
-                JOIN annotations a ON h.annotation_id = a.id
-                JOIN categories c ON a.category_id = c.id
-                WHERE a.media_id = %s
-                ORDER BY h.changed_at DESC
-                LIMIT 50
-            ''', (media_id,))
-            return cursor.fetchall()
+            cursor.execute("SELECT COUNT(*) as count FROM markup_results")
+            return cursor.fetchone()["count"]
+
+    @staticmethod
+    def reset_annotations():
+        """Reset all annotations (set emotion to NULL)"""
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE markup_results 
+                SET emotion = NULL, updated_at = CURRENT_TIMESTAMP
+            """
+            )
+            return cursor.rowcount
+
+    @staticmethod
+    def get_unannotated(limit=None):
+        """Get unannotated media items"""
+        with db.get_cursor() as cursor:
+            query = "SELECT * FROM markup_results WHERE emotion IS NULL ORDER BY id"
+            if limit:
+                cursor.execute(f"{query} LIMIT %s", (limit,))
+            else:
+                cursor.execute(query)
+            results = cursor.fetchall()
+            return [dict(result) for result in results]
+
+    @staticmethod
+    def get_annotated():
+        """Get annotated media items"""
+        with db.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM markup_results WHERE emotion IS NOT NULL ORDER BY updated_at DESC"
+            )
+            results = cursor.fetchall()
+            return [dict(result) for result in results]

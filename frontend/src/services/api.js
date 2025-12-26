@@ -10,7 +10,7 @@ const api = axios.create({
   },
 });
 
-export const mediaService = {
+export const markupService = {
   // Health check
   checkHealth: async () => {
     try {
@@ -22,64 +22,32 @@ export const mediaService = {
     }
   },
 
-  // Fetch media items from server
+  // Fetch all media with markup status
   getMediaItems: async () => {
     try {
       const response = await api.get('/media');
       return response.data.items || [];
     } catch (error) {
       console.error('Error fetching media items:', error);
-      // Return fallback data if API fails
-      return Array.from({ length: 6 }, (_, i) => ({
-        id: i + 1,
-        type: i === 5 ? 'video' : 'image',
-        url: `/api/media/${i + 1}/file`,
-        title: `Sample ${i === 5 ? 'Video' : 'Image'} ${i + 1}`
-      }));
+      return [];
     }
   },
 
-  // Get next media item
-  getNextMedia: async (currentId) => {
-    try {
-      const response = await api.get('/next', {
-        params: { current_id: currentId }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting next media:', error);
-      throw error;
-    }
-  },
-
-  // Get previous media item
-  getPrevMedia: async (currentId) => {
-    try {
-      const response = await api.get('/prev', {
-        params: { current_id: currentId }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting previous media:', error);
-      throw error;
-    }
-  },
-
-  // Submit annotation to server
-  submitAnnotation: async (mediaId, tag) => {
+  // Submit emotion markup
+  submitMarkup: async (mediaId, emotion) => {
     try {
       const response = await api.post('/annotate', {
         mediaId,
-        tag
+        tag: emotion
       });
       return response.data;
     } catch (error) {
-      console.error('Error submitting annotation:', error);
+      console.error('Error submitting markup:', error);
       throw error;
     }
   },
 
-  // Get statistics from server
+  // Get statistics
   getStats: async () => {
     try {
       const response = await api.get('/stats');
@@ -87,10 +55,12 @@ export const mediaService = {
     } catch (error) {
       console.error('Error fetching stats:', error);
       return {
-        total_media: 6,
+        total_media: 0,
         total_annotated: 0,
+        pending: 0,
         completion_rate: 0,
-        tags_summary: {}
+        emotion_summary: {},
+        type_summary: {}
       };
     }
   },
@@ -120,23 +90,52 @@ export const mediaService = {
     }
   },
 
-  // Reset data
-  resetData: async () => {
+  // Reset annotations
+  resetAnnotations: async () => {
     try {
       const response = await api.post('/reset');
       return response.data;
     } catch (error) {
-      console.error('Error resetting data:', error);
+      console.error('Error resetting annotations:', error);
       throw error;
     }
   },
 
-  // Get media file URL
-  getMediaFileUrl: (media) => {
-    if (media.url && media.url.startsWith('/')) {
-      return media.url;
+  // Export results
+  exportResults: async () => {
+    try {
+      const response = await api.get('/export');
+      return response.data;
+    } catch (error) {
+      console.error('Error exporting results:', error);
+      throw error;
     }
-    return `/api/media/${media.id}/file`;
+  },
+
+  // Get next unannotated media
+  getNextUnannotated: async (currentId) => {
+    try {
+      const response = await api.get('/next', {
+        params: { current_id: currentId }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error getting next media:', error);
+      throw error;
+    }
+  },
+
+  // Get previous media
+  getPrevious: async (currentId) => {
+    try {
+      const response = await api.get('/prev', {
+        params: { current_id: currentId }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error getting previous media:', error);
+      throw error;
+    }
   }
 };
 

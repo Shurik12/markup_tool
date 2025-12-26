@@ -1,5 +1,12 @@
+# Server
 Flask==2.3.3
 Flask-CORS==4.0.0
-psycopg2-binary==2.9.7
 python-dotenv==1.0.0
-Pillow==10.0.0
+Werkzeug==2.3.7
+# PostgreSQL
+psycopg2-binary==2.9.9
+# Image processing
+Pillow==10.1.0
+# Work with code: chack and format
+flake8==7.3.0
+black==25.12.0

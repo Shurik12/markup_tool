@@ -4,6 +4,7 @@ const Markup = ({ mediaItems, onBack }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [markups, setMarkups] = useState({});
   const [stats, setStats] = useState(null);
+  const [error, setError] = useState('');
   
   const tags = ['angry', 'sad', 'neutral', 'happy', 'disgust', 'surprise', 'fear'];
 
@@ -25,15 +26,15 @@ const Markup = ({ mediaItems, onBack }) => {
 
   const currentItem = mediaItems[currentIndex];
   const currentTag = markups[currentIndex];
+  const annotatedCount = Object.keys(markups).length;
 
   const setCurrentTag = async (itemIndex, tag) => {
-    // Update local state
+    setError('');
     setMarkups(prev => ({
       ...prev,
       [itemIndex]: tag
     }));
 
-    // Send to backend
     try {
       const response = await fetch('/api/annotate', {
         method: 'POST',
@@ -49,29 +50,34 @@ const Markup = ({ mediaItems, onBack }) => {
       if (response.ok) {
         const data = await response.json();
         setStats(data.stats);
+      } else {
+        setError('Failed to save annotation');
       }
     } catch (error) {
       console.error('Failed to save annotation:', error);
+      setError('Network error. Please try again.');
     }
   };
 
   const goToNext = () => {
     if (currentIndex < mediaItems.length - 1) {
       setCurrentIndex(prev => prev + 1);
+      setError('');
     }
   };
 
   const goToPrev = () => {
     if (currentIndex > 0) {
       setCurrentIndex(prev => prev - 1);
+      setError('');
     }
   };
 
   const handleFinish = () => {
-    const annotatedCount = Object.keys(markups).length;
-    const message = `Markup Session Complete!\n\nTotal Items: ${mediaItems.length}\nAnnotated Items: ${annotatedCount}\nCompletion Rate: ${((annotatedCount / mediaItems.length) * 100).toFixed(1)}%`;
+    const completionRate = ((annotatedCount / mediaItems.length) * 100).toFixed(1);
+    const message = `Session Complete!\n\nTotal: ${mediaItems.length}\nAnnotated: ${annotatedCount}\nProgress: ${completionRate}%\n\nReturn to Welcome?`;
     
-    if (window.confirm(message + '\n\nReturn to Welcome screen?')) {
+    if (window.confirm(message)) {
       onBack();
     }
   };
@@ -93,11 +99,13 @@ const Markup = ({ mediaItems, onBack }) => {
   if (!currentItem || mediaItems.length === 0) {
     return (
       <div className="markup-container">
-        <div className="media-loading">No media items available.</div>
+        <div className="error-message" style={{ margin: 'auto' }}>
+          No media items available.
+        </div>
         <button 
           onClick={onBack}
-          className="control-button"
-          style={{ margin: '2rem auto', display: 'block' }}
+          className="control-button finish"
+          style={{ margin: '1rem auto', width: '200px' }}
         >
           Back to Welcome
         </button>
@@ -106,40 +114,42 @@ const Markup = ({ mediaItems, onBack }) => {
   }
 
   const mediaUrl = getMediaUrl(currentItem);
-  const annotatedCount = Object.keys(markups).length;
 
   return (
     <div className="markup-container">
       {/* Header */}
       <div className="markup-header">
-        <button 
-          onClick={onBack}
-          className="back-button"
-          title="Back to Welcome"
-        >
-          ← Back
-        </button>
-        <h1 className="markup-title">Markup Tool</h1>
+        <div className="header-left">
+          <button 
+            onClick={onBack}
+            className="back-button"
+            title="Back to Welcome"
+          >
+            ← Back
+          </button>
+          <h1 className="markup-title">Markup Tool</h1>
+        </div>
         <div className="progress-info">
-          {currentIndex + 1}/{mediaItems.length}
+          {currentIndex + 1} / {mediaItems.length}
         </div>
       </div>
 
       {/* Main Content */}
       <div className="markup-content">
-        {/* Left - Media Display */}
-        <div className="media-section">
+        {/* Left: Media Preview */}
+        <div className="media-card">
           <div className="media-header">
             <h3>Media Preview</h3>
+            <span className="media-id">ID: {currentItem.id}</span>
           </div>
           <div className="media-display">
             {currentItem.type === 'image' ? (
               <img 
                 src={mediaUrl} 
-                alt={currentItem.title || `Media ${currentIndex + 1}`}
+                alt={`Media ${currentItem.id}`}
                 onError={(e) => {
                   e.target.onerror = null;
-                  e.target.src = `https://picsum.photos/800/600?random=${currentIndex + 1}`;
+                  e.target.src = `https://picsum.photos/400/300?random=${currentItem.id}&blur=1`;
                 }}
               />
             ) : (
@@ -152,105 +162,106 @@ const Markup = ({ mediaItems, onBack }) => {
               </video>
             )}
           </div>
-          <div className="media-title">
-            {currentItem.title || `Media Item ${currentIndex + 1}`}
+        </div>
+
+        {/* Right: Tags Section */}
+        <div className="tags-card">
+          <div className="tags-header">
+            <h3>Select Emotion Tag</h3>
+            {currentTag && (
+              <span className="current-tag-display">
+                Selected: <strong>{currentTag}</strong>
+              </span>
+            )}
+          </div>
+          
+          <div className="tags-grid">
+            {tags.map(tag => (
+              <button
+                key={tag}
+                className={`tag-button ${tag} ${currentTag === tag ? 'selected' : ''}`}
+                onClick={() => handleTagClick(tag)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+
+          {/* Error Message */}
+          {error && (
+            <div className="error-message">
+              {error}
+            </div>
+          )}
+
+          {/* Controls */}
+          <div className="controls-row">
+            <button
+              className="control-button prev"
+              onClick={goToPrev}
+              disabled={currentIndex === 0}
+            >
+              Previous
+            </button>
+            
+            <button
+              className="control-button next"
+              onClick={goToNext}
+              disabled={currentIndex === mediaItems.length - 1}
+            >
+              Next →
+            </button>
+            
+            <button
+              className="control-button finish"
+              onClick={handleFinish}
+            >
+              Finish
+            </button>
           </div>
         </div>
 
-        {/* Right - Tags and Controls */}
-        <div className="controls-section">
-          {/* Tags */}
-          <div className="tags-container">
-            <h2 className="tags-title">Select Emotion Tag</h2>
-            <div className="tags-grid">
-              {tags.map(tag => (
-                <button
-                  key={tag}
-                  className={`tag-button ${tag} ${currentTag === tag ? 'selected' : ''}`}
-                  onClick={() => handleTagClick(tag)}
-                  title={`Tag as ${tag}`}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-            {currentTag && (
-              <div className="current-tag">
-                Selected: <strong>{currentTag}</strong>
-              </div>
-            )}
+        {/* Statistics - Full Width */}
+        <div className="stats-card">
+          <div className="stats-header">
+            <h3>Statistics</h3>
+            <span className="stats-progress">
+              {annotatedCount} / {mediaItems.length} completed
+            </span>
           </div>
-
-          {/* Controls */}
-          <div className="controls-container">
-            <div className="controls-buttons">
-              <button
-                className="control-button prev"
-                onClick={goToPrev}
-                disabled={currentIndex === 0}
-                title="Previous media"
-              >
-                ← Previous
-              </button>
-              
-              <button
-                className="control-button next"
-                onClick={goToNext}
-                disabled={currentIndex === mediaItems.length - 1}
-                title="Next media"
-              >
-                Next →
-              </button>
-              
-              <button
-                className="control-button submit"
-                onClick={handleFinish}
-                title="Finish markup session"
-              >
-                Finish
-              </button>
+          
+          <div className="stats-grid">
+            <div className="stat-item">
+              <div className="stat-label">Total</div>
+              <div className="stat-value">{mediaItems.length}</div>
+            </div>
+            
+            <div className="stat-item">
+              <div className="stat-label">Annotated</div>
+              <div className="stat-value">{annotatedCount}</div>
+            </div>
+            
+            <div className="stat-item">
+              <div className="stat-label">Progress</div>
+              <div className="stat-value">
+                {((annotatedCount / mediaItems.length) * 100).toFixed(0)}%
+              </div>
             </div>
           </div>
 
-          {/* Stats */}
-          <div className="stats-container">
-            <div className="stats-title">
-              <span>Statistics</span>
-              <span style={{ fontSize: '0.9rem', color: '#666' }}>
-                {annotatedCount}/{mediaItems.length} completed
-              </span>
+          {/* Tag Distribution */}
+          {stats && stats.tags_summary && Object.keys(stats.tags_summary).length > 0 && (
+            <div className="tags-distribution">
+              <h4>Tag Distribution</h4>
+              <div className="tags-list">
+                {Object.entries(stats.tags_summary).map(([tag, count]) => (
+                  <span key={tag} className="tag-badge">
+                    {tag}: {count}
+                  </span>
+                ))}
+              </div>
             </div>
-            <div className="stats-grid">
-              <div className="stat-item">
-                <div className="stat-label">Total</div>
-                <div className="stat-value">{mediaItems.length}</div>
-              </div>
-              <div className="stat-item">
-                <div className="stat-label">Annotated</div>
-                <div className="stat-value">{annotatedCount}</div>
-              </div>
-              <div className="stat-item">
-                <div className="stat-label">Progress</div>
-                <div className="stat-value">
-                  {((annotatedCount / mediaItems.length) * 100).toFixed(0)}%
-                </div>
-              </div>
-              {stats && stats.tags_summary && Object.keys(stats.tags_summary).length > 0 && (
-                <div className="stat-tags">
-                  <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem', textAlign: 'center' }}>
-                    Tag Distribution
-                  </div>
-                  <div className="tags-summary">
-                    {Object.entries(stats.tags_summary).map(([tag, count]) => (
-                      <span key={tag} className="tag-badge">
-                        {tag}: {count}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
