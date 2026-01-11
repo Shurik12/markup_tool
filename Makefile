@@ -55,41 +55,20 @@ install-frontend:
 run:
 	cd backend && python3 app.py
 
-build-frontend:
-	@echo "${BLUE}Building React frontend for production...${NC}"
+build:
 	cd frontend && npm run build
-	@echo "${GREEN}✅ Frontend built in frontend/dist/${NC}"
 
-# ====================
-# CLEANUP
-# ====================
-
-clean: pycache clean-frontend
-	@echo "${GREEN}Project cleaned${NC}"
-
-clean-pycache:
-	@echo "${YELLOW}Cleaning Python cache files...${NC}"
+clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	find . -type f -name "*.pyo" -delete
-	find . -type f -name "*.pyd" -delete
-	find . -type f -name ".coverage" -delete
-	@echo "${GREEN}Python cache cleaned${NC}"
 
 clean-frontend:
-	@echo "${YELLOW}Cleaning frontend artifacts...${NC}"
 	rm -rf frontend/node_modules
 	rm -rf frontend/build
-	rm -rf frontend/.next
 	rm -f frontend/package-lock.json
-	rm -f frontend/yarn.lock
-	@echo "${GREEN}Frontend cleaned${NC}"
 
 clean-backend:
-	@echo "${YELLOW}Cleaning backend artifacts...${NC}"
 	rm -rf backend/venv
 	rm -rf backend/uploads/*
-	@echo "${GREEN} Backend cleaned${NC}"
 
 # ====================
 # CODE QUALITY

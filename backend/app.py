@@ -148,18 +148,49 @@ def submit_annotation():
     """Submit annotation for media"""
     data = request.json
 
-    if not data or "mediaId" not in data or "tag" not in data:
+    if not data or "mediaId" not in data:
         return jsonify({"error": "Missing required fields"}), 400
 
     media_id = data["mediaId"]
-    emotion = data["tag"]
+    emotion = data.get("tag")
+    valence = data.get("valence")
+    arousal = data.get("arousal")
 
-    # Validate emotion
-    if emotion not in EMOTIONS:
+    # Validate that either emotion or VAD is provided
+    if emotion is None and (valence is None or arousal is None):
+        return jsonify({"error": "Provide either emotion tag or VAD values"}), 400
+
+    # Validate emotion if provided
+    if emotion and emotion not in EMOTIONS:
         return jsonify({"error": "Invalid emotion tag"}), 400
 
+    # Validate VAD values if provided
+    if valence is not None:
+        try:
+            valence_val = float(valence)
+            if not -1.0 <= valence_val <= 1.0:
+                return jsonify({"error": "Valence must be between -1.0 and 1.0"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "Valence must be a number"}), 400
+
+    if arousal is not None:
+        try:
+            arousal_val = float(arousal)
+            if not -1.0 <= arousal_val <= 1.0:
+                return jsonify({"error": "Arousal must be between -1.0 and 1.0"}), 400
+        except (ValueError, TypeError):
+            return jsonify({"error": "Arousal must be a number"}), 400
+
     # Update markup result
-    result = MarkupResult.update_emotion(media_id, emotion)
+    if emotion and (valence is not None or arousal is not None):
+        # Update both emotion and VAD
+        result = MarkupResult.update_emotion(media_id, emotion, valence, arousal)
+    elif emotion:
+        # Update only emotion
+        result = MarkupResult.update_emotion(media_id, emotion)
+    else:
+        # Update only VAD
+        result = MarkupResult.update_vad(media_id, valence, arousal)
 
     if not result:
         return jsonify({"error": "Media not found"}), 404

@@ -55,6 +55,8 @@ def init_database():
                 emotion VARCHAR(20) CHECK (emotion IN (
                     'angry', 'sad', 'neutral', 'happy', 'disgust', 'surprise', 'fear'
                 )),
+                valence DECIMAL(3,2) CHECK (valence >= -1.0 AND valence <= 1.0),
+                arousal DECIMAL(3,2) CHECK (arousal >= -1.0 AND arousal <= 1.0),
                 title VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -91,7 +93,7 @@ class MarkupResult:
                 """
                 SELECT *, 
                        CASE 
-                           WHEN emotion IS NULL THEN 'pending'
+                           WHEN emotion IS NULL OR valence IS NULL OR arousal IS NULL THEN 'pending'
                            ELSE 'completed'
                        END as status
                 FROM markup_results 
@@ -111,7 +113,7 @@ class MarkupResult:
                 """
                 SELECT *, 
                        CASE 
-                           WHEN emotion IS NULL THEN 'pending'
+                           WHEN emotion IS NULL OR valence IS NULL OR arousal IS NULL THEN 'pending'
                            ELSE 'completed'
                        END as status
                 FROM markup_results 
@@ -152,17 +154,46 @@ class MarkupResult:
             return dict(result) if result else None
 
     @staticmethod
-    def update_emotion(media_id, emotion):
-        """Update emotion for a markup result"""
+    def update_emotion(media_id, emotion, valence=None, arousal=None):
+        """Update emotion and VAD (valence, arousal) for a markup result"""
+        with db.get_cursor() as cursor:
+            # If only emotion is provided, keep existing VAD values
+            if valence is None or arousal is None:
+                cursor.execute(
+                    """
+                    SELECT valence, arousal FROM markup_results WHERE id = %s
+                    """,
+                    (media_id,),
+                )
+                existing = cursor.fetchone()
+                if existing:
+                    valence = valence if valence is not None else existing["valence"]
+                    arousal = arousal if arousal is not None else existing["arousal"]
+
+            cursor.execute(
+                """
+                UPDATE markup_results 
+                SET emotion = %s, valence = %s, arousal = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                RETURNING *
+            """,
+                (emotion, valence, arousal, media_id),
+            )
+            result = cursor.fetchone()
+            return dict(result) if result else None
+
+    @staticmethod
+    def update_vad(media_id, valence, arousal):
+        """Update only VAD values without changing emotion"""
         with db.get_cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE markup_results 
-                SET emotion = %s, updated_at = CURRENT_TIMESTAMP
+                SET valence = %s, arousal = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 RETURNING *
             """,
-                (emotion, media_id),
+                (valence, arousal, media_id),
             )
             result = cursor.fetchone()
             return dict(result) if result else None
@@ -175,7 +206,7 @@ class MarkupResult:
                 cursor.execute(
                     """
                     SELECT * FROM markup_results 
-                    WHERE id > %s AND emotion IS NULL
+                    WHERE id > %s AND (emotion IS NULL OR valence IS NULL OR arousal IS NULL)
                     ORDER BY id
                     LIMIT 1
                 """,
@@ -185,7 +216,7 @@ class MarkupResult:
                 cursor.execute(
                     """
                     SELECT * FROM markup_results 
-                    WHERE emotion IS NULL
+                    WHERE emotion IS NULL OR valence IS NULL OR arousal IS NULL
                     ORDER BY id
                     LIMIT 1
                 """
@@ -218,9 +249,13 @@ class MarkupResult:
             cursor.execute("SELECT COUNT(*) as total FROM markup_results")
             total = cursor.fetchone()["total"]
 
-            # Get annotated count
+            # Get fully annotated count (all three fields)
             cursor.execute(
-                "SELECT COUNT(*) as annotated FROM markup_results WHERE emotion IS NOT NULL"
+                """
+                SELECT COUNT(*) as annotated 
+                FROM markup_results 
+                WHERE emotion IS NOT NULL AND valence IS NOT NULL AND arousal IS NOT NULL
+                """
             )
             annotated = cursor.fetchone()["annotated"]
 
@@ -251,6 +286,20 @@ class MarkupResult:
             type_dist = cursor.fetchall()
             type_summary = {row["type"]: row["count"] for row in type_dist}
 
+            # Get VAD statistics
+            cursor.execute(
+                """
+                SELECT 
+                    ROUND(AVG(valence)::numeric, 2) as avg_valence,
+                    ROUND(AVG(arousal)::numeric, 2) as avg_arousal,
+                    ROUND(STDDEV(valence)::numeric, 2) as std_valence,
+                    ROUND(STDDEV(arousal)::numeric, 2) as std_arousal
+                FROM markup_results 
+                WHERE valence IS NOT NULL AND arousal IS NOT NULL
+                """
+            )
+            vad_stats = cursor.fetchone()
+
             return {
                 "total_media": total,
                 "total_annotated": annotated,
@@ -258,6 +307,7 @@ class MarkupResult:
                 "completion_rate": (annotated / total * 100) if total > 0 else 0,
                 "emotion_summary": emotion_summary,
                 "type_summary": type_summary,
+                "vad_summary": dict(vad_stats) if vad_stats else {},
             }
 
     @staticmethod
@@ -269,12 +319,12 @@ class MarkupResult:
 
     @staticmethod
     def reset_annotations():
-        """Reset all annotations (set emotion to NULL)"""
+        """Reset all annotations (set emotion, valence, arousal to NULL)"""
         with db.get_cursor() as cursor:
             cursor.execute(
                 """
                 UPDATE markup_results 
-                SET emotion = NULL, updated_at = CURRENT_TIMESTAMP
+                SET emotion = NULL, valence = NULL, arousal = NULL, updated_at = CURRENT_TIMESTAMP
             """
             )
             return cursor.rowcount
@@ -283,7 +333,11 @@ class MarkupResult:
     def get_unannotated(limit=None):
         """Get unannotated media items"""
         with db.get_cursor() as cursor:
-            query = "SELECT * FROM markup_results WHERE emotion IS NULL ORDER BY id"
+            query = """
+                SELECT * FROM markup_results 
+                WHERE emotion IS NULL OR valence IS NULL OR arousal IS NULL 
+                ORDER BY id
+            """
             if limit:
                 cursor.execute(f"{query} LIMIT %s", (limit,))
             else:
@@ -296,7 +350,11 @@ class MarkupResult:
         """Get annotated media items"""
         with db.get_cursor() as cursor:
             cursor.execute(
-                "SELECT * FROM markup_results WHERE emotion IS NOT NULL ORDER BY updated_at DESC"
+                """
+                SELECT * FROM markup_results 
+                WHERE emotion IS NOT NULL AND valence IS NOT NULL AND arousal IS NOT NULL 
+                ORDER BY updated_at DESC
+                """
             )
             results = cursor.fetchall()
             return [dict(result) for result in results]
