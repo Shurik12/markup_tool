@@ -29,3 +29,8 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO markup_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO markup_user;
 \q
 ```
+Docker usage:
+```bash
+docker exec -it <container name> bash
+psql -U postgres
+```

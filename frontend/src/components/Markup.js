@@ -1,17 +1,52 @@
 import React, { useState, useEffect } from 'react';
 
 const Markup = ({ mediaItems, onBack }) => {
+  // Get saved current index from localStorage
+  const getSavedIndex = () => {
+    try {
+      const saved = localStorage.getItem('markupCurrentIndex');
+      const index = saved ? parseInt(saved, 10) : 0;
+      // Ensure index is within bounds
+      if (mediaItems.length > 0) {
+        return Math.min(Math.max(0, index), mediaItems.length - 1);
+      }
+      return 0;
+    } catch (error) {
+      console.error('Error reading saved index:', error);
+      return 0;
+    }
+  };
+
   const [currentIndex, setCurrentIndex] = useState(0);
   const [markups, setMarkups] = useState({});
   const [vadValues, setVadValues] = useState({});
   const [stats, setStats] = useState(null);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true); // Add loading state
 
   const tags = ['angry', 'sad', 'neutral', 'happy', 'disgust', 'surprise', 'fear'];
 
+  // Initialize current index when mediaItems are loaded
   useEffect(() => {
-    loadStats();
-  }, []);
+    if (mediaItems.length > 0) {
+      const savedIndex = getSavedIndex();
+      setCurrentIndex(savedIndex);
+      setLoading(false);
+    }
+  }, [mediaItems]);
+
+  // Save current index to localStorage whenever it changes
+  useEffect(() => {
+    if (mediaItems.length > 0) {
+      localStorage.setItem('markupCurrentIndex', currentIndex.toString());
+    }
+  }, [currentIndex, mediaItems.length]);
+
+  useEffect(() => {
+    if (mediaItems.length > 0) {
+      loadStats();
+    }
+  }, [mediaItems]);
 
   const loadStats = async () => {
     try {
@@ -120,6 +155,8 @@ const Markup = ({ mediaItems, onBack }) => {
     const message = `Session Complete!\n\nTotal: ${mediaItems.length}\nAnnotated: ${annotatedCount}\nProgress: ${completionRate}%\n\nReturn to Welcome?`;
 
     if (window.confirm(message)) {
+      // Clear saved positions when finishing
+      localStorage.removeItem('markupCurrentIndex');
       onBack();
     }
   };
@@ -201,6 +238,53 @@ const Markup = ({ mediaItems, onBack }) => {
 
     return `/api/media/${item.id}/file`;
   };
+
+  // Load existing annotations for current item
+  useEffect(() => {
+    const loadExistingAnnotations = async () => {
+      if (!currentItem) return;
+
+      try {
+        const response = await fetch(`/api/media/${currentItem.id}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.emotion) {
+            setMarkups(prev => ({
+              ...prev,
+              [currentIndex]: data.emotion
+            }));
+          }
+          if (data.valence !== null || data.arousal !== null) {
+            setVadValues(prev => ({
+              ...prev,
+              [currentIndex]: {
+                valence: data.valence,
+                arousal: data.arousal
+              }
+            }));
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load annotations:', error);
+      }
+    };
+
+    if (currentItem) {
+      loadExistingAnnotations();
+    }
+  }, [currentIndex, currentItem]);
+
+  // Show loading while media items are being initialized
+  if (loading) {
+    return (
+      <div className="markup-container">
+        <div className="loading-spinner" style={{ margin: 'auto' }}></div>
+        <p style={{ textAlign: 'center', color: '#666', marginTop: '1rem' }}>
+          Loading media items...
+        </p>
+      </div>
+    );
+  }
 
   if (!currentItem || mediaItems.length === 0) {
     return (

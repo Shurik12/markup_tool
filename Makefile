@@ -91,27 +91,3 @@ format-frontend: ## Format JavaScript/React code with prettier
 	@echo "${GREEN}Frontend formatting complete${NC}"
 
 format: format-backend format-frontend
-
-# ====================
-# PROJECT INFO
-# ====================
-
-status: ## Show project status
-	@echo "${BLUE}=== Markup Tool Project Status ===${NC}"
-	@echo ""
-	@echo "${YELLOW}Backend:${NC}"
-	@cd backend && python --version 2>/dev/null || echo "Python not found"
-	@cd backend && [ -f requirements.txt ] && echo "✅ requirements.txt exists" || echo "❌ requirements.txt missing"
-	@echo ""
-	@echo "${YELLOW}Frontend:${NC}"
-	@cd frontend && [ -f package.json ] && echo "✅ package.json exists" || echo "❌ package.json missing"
-	@cd frontend && [ -d node_modules ] && echo "✅ node_modules exists" || echo "❌ node_modules missing"
-	@echo ""
-	@echo "${YELLOW}Database:${NC}"
-	@curl -s http://localhost:5000/api/health 2>/dev/null | grep -q "healthy" && echo "✅ Backend is healthy" || echo "❌ Backend not responding"
-	@echo ""
-	@echo "${YELLOW}Quick Start:${NC}"
-	@echo "  make setup          # Install dependencies"
-	@echo "  make backend        # Start backend"
-	@echo "  make frontend       # Start frontend dev"
-	@echo "  make run-production # Production mode"
