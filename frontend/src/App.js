@@ -1,200 +1,177 @@
 import React, { useState, useEffect } from 'react';
 import Welcome from './components/Welcome';
 import Markup from './components/Markup';
+import ProjectSelector from './components/ProjectSelector';
 import './styles/App.css';
 
 function App() {
-  // Read initial state from localStorage
-  const getInitialState = () => {
-    try {
-      const saved = localStorage.getItem('markupApp_isMarkupStarted');
-      // Check if saved state is recent (less than 1 hour)
-      const savedTime = localStorage.getItem('markupApp_savedTime');
-      if (savedTime) {
-        const hoursDiff = (Date.now() - parseInt(savedTime)) / (1000 * 60 * 60);
-        if (hoursDiff > 1) {
-          // Clear stale state (older than 1 hour)
-          localStorage.removeItem('markupApp_isMarkupStarted');
-          localStorage.removeItem('markupApp_savedTime');
-          return false;
-        }
-      }
-      return saved === 'true';
-    } catch (error) {
-      console.error('Error reading saved state:', error);
-      return false;
-    }
-  };
-
-  const [isMarkupStarted, setIsMarkupStarted] = useState(getInitialState());
+  const [currentView, setCurrentView] = useState('welcome');
+  const [selectedProject, setSelectedProject] = useState(null);
   const [mediaItems, setMediaItems] = useState([]);
-  const [loading, setLoading] = useState(true); // Start with loading true
+  const [loading, setLoading] = useState(false);
+  const [loadingMedia, setLoadingMedia] = useState(false);
   const [error, setError] = useState('');
+  const [restoringState, setRestoringState] = useState(false);
 
-  // Load media items on component mount AND when isMarkupStarted changes
+  // Load saved state
   useEffect(() => {
-    const loadMediaItems = async () => {
-      // Only load if we have no items yet
-      if (mediaItems.length === 0) {
-        setLoading(true);
-        setError('');
-        try {
-          const response = await fetch('/api/media');
-          if (response.ok) {
-            const data = await response.json();
-            setMediaItems(data.items || []);
+    const restoreSavedState = async () => {
+      try {
+        const savedView = localStorage.getItem('markupApp_currentView');
+        const savedProject = localStorage.getItem('markupApp_selectedProject');
+        const savedTime = localStorage.getItem('markupApp_savedTime');
+
+        if (savedView && savedTime) {
+          const hoursDiff = (Date.now() - parseInt(savedTime)) / (1000 * 60 * 60);
+          if (hoursDiff < 1) { // Less than 1 hour old
+            setRestoringState(true);
+            
+            // Restore the view
+            setCurrentView(savedView);
+            
+            // If we were on markup view, restore project and media
+            if (savedView === 'markup' && savedProject) {
+              const project = JSON.parse(savedProject);
+              setSelectedProject(project);
+              
+              // Load project media
+              await loadProjectMedia(project.project);
+            }
+            
+            setRestoringState(false);
           } else {
-            throw new Error('Failed to fetch media');
+            clearSavedState();
           }
-        } catch (err) {
-          console.error('Error loading media items:', err);
-          setError('Failed to load media items. Please try again.');
-          // If we're in markup mode but failed to load, go back to welcome
-          if (isMarkupStarted) {
-            setIsMarkupStarted(false);
-            localStorage.removeItem('markupApp_isMarkupStarted');
-            localStorage.removeItem('markupApp_savedTime');
-          }
-        } finally {
-          setLoading(false);
         }
+      } catch (error) {
+        console.error('Error reading saved state:', error);
+        clearSavedState();
+        setRestoringState(false);
       }
     };
 
-    loadMediaItems();
-  }, [isMarkupStarted]);
+    restoreSavedState();
+  }, []);
 
-  // Save state to localStorage whenever it changes
+  // Save state when view changes
   useEffect(() => {
-    if (isMarkupStarted) {
-      localStorage.setItem('markupApp_isMarkupStarted', 'true');
+    if (currentView !== 'welcome') {
+      localStorage.setItem('markupApp_currentView', currentView);
       localStorage.setItem('markupApp_savedTime', Date.now().toString());
-    } else {
-      localStorage.removeItem('markupApp_isMarkupStarted');
-      localStorage.removeItem('markupApp_savedTime');
     }
-  }, [isMarkupStarted]);
+  }, [currentView]);
 
-  const handleStartMarkup = () => {
-    // If we already have media items, just switch to markup
-    if (mediaItems.length > 0) {
-      setIsMarkupStarted(true);
-    } else {
-      // Otherwise, reload media items first
-      setLoading(true);
-      fetch('/api/media')
-        .then(response => {
-          if (response.ok) {
-            return response.json();
-          }
-          throw new Error('Failed to fetch media');
-        })
-        .then(data => {
-          setMediaItems(data.items || []);
-          setIsMarkupStarted(true);
-        })
-        .catch(err => {
-          console.error('Error starting markup:', err);
-          setError('Failed to load media items. Please try again.');
-        })
-        .finally(() => {
-          setLoading(false);
-        });
+  // Save project when it changes
+  useEffect(() => {
+    if (selectedProject && currentView === 'markup') {
+      localStorage.setItem('markupApp_selectedProject', JSON.stringify(selectedProject));
+      localStorage.setItem('markupApp_savedTime', Date.now().toString());
     }
-  };
+  }, [selectedProject, currentView]);
 
-  const handleBackToWelcome = () => {
-    setIsMarkupStarted(false);
-    // Also clear current position in Markup if saved
+  const clearSavedState = () => {
+    localStorage.removeItem('markupApp_currentView');
+    localStorage.removeItem('markupApp_selectedProject');
+    localStorage.removeItem('markupApp_savedTime');
     localStorage.removeItem('markupCurrentIndex');
   };
 
-  // Clear stale state on page unload (optional)
-  useEffect(() => {
-    const clearStaleState = () => {
-      const savedTime = localStorage.getItem('markupApp_savedTime');
-      if (savedTime) {
-        const hoursDiff = (Date.now() - parseInt(savedTime)) / (1000 * 60 * 60);
-        if (hoursDiff > 24) {
-          // Clear state older than 24 hours
-          localStorage.removeItem('markupApp_isMarkupStarted');
-          localStorage.removeItem('markupApp_savedTime');
-          localStorage.removeItem('markupCurrentIndex');
-        }
+  const loadProjectMedia = async (projectName) => {
+    setLoadingMedia(true);
+    setError('');
+
+    try {
+      const response = await fetch(`/api/projects/${projectName}/media`);
+      if (response.ok) {
+        const data = await response.json();
+        setMediaItems(data.items || []);
+      } else {
+        throw new Error('Failed to load project media');
       }
-    };
+    } catch (err) {
+      console.error('Error loading project media:', err);
+      setError('Failed to load project media. Please try again.');
+      setCurrentView('project-select');
+      clearSavedState();
+    } finally {
+      setLoadingMedia(false);
+    }
+  };
 
-    // Run on component mount
-    clearStaleState();
+  const handleStartMarkup = () => {
+    setCurrentView('project-select');
+  };
 
-    // Also run when tab/window is about to close
-    window.addEventListener('beforeunload', clearStaleState);
+  const handleProjectSelect = async (project) => {
+    setSelectedProject(project);
+    setCurrentView('markup');
     
-    return () => {
-      window.removeEventListener('beforeunload', clearStaleState);
-    };
-  }, []);
+    // Load project media
+    setLoadingMedia(true);
+    await loadProjectMedia(project.project);
+  };
 
-  // Show loading spinner if we're loading media items
-  if (loading) {
+  const handleBackToProjectSelect = () => {
+    // Don't clear everything, just go back to project select
+    setSelectedProject(null);
+    setMediaItems([]);
+    setCurrentView('project-select');
+    
+    // Update localStorage
+    localStorage.setItem('markupApp_currentView', 'project-select');
+    localStorage.setItem('markupApp_savedTime', Date.now().toString());
+    localStorage.removeItem('markupApp_selectedProject');
+    localStorage.removeItem('markupCurrentIndex');
+  };
+
+  const handleBackToWelcome = () => {
+    clearSavedState();
+    setSelectedProject(null);
+    setMediaItems([]);
+    setCurrentView('welcome');
+  };
+
+  // Show loading while restoring state
+  if (restoringState) {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
-        <p style={{ marginTop: '1rem', color: '#666' }}>Loading media items...</p>
+        <p style={{ marginTop: '1rem', color: '#666' }}>Restoring your session...</p>
       </div>
     );
   }
 
-  // Show error if we're in welcome mode and have an error
-  if (error && !isMarkupStarted) {
+  // Show loading while loading media for markup view
+  if (currentView === 'markup' && loadingMedia) {
     return (
-      <div className="welcome-container">
-        <div className="welcome-content">
-          <h1 className="welcome-title">Error</h1>
-          <p className="welcome-subtitle" style={{ color: '#dc2626' }}>
-            {error}
-          </p>
-          <button 
-            className="start-button"
-            onClick={() => window.location.reload()}
-            style={{ background: '#dc2626' }}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // If we're in markup mode but have no media items, show error
-  if (isMarkupStarted && mediaItems.length === 0) {
-    return (
-      <div className="welcome-container">
-        <div className="welcome-content">
-          <h1 className="welcome-title">No Media Available</h1>
-          <p className="welcome-subtitle">
-            No media items were found. Please upload some media first or check your connection.
-          </p>
-          <button 
-            className="start-button"
-            onClick={handleBackToWelcome}
-          >
-            Back to Welcome
-          </button>
-        </div>
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p style={{ marginTop: '1rem', color: '#666' }}>Loading project media...</p>
       </div>
     );
   }
 
   return (
     <div className="app-container">
-      {isMarkupStarted ? (
-        <Markup 
-          mediaItems={mediaItems} 
-          onBack={handleBackToWelcome}
-        />
-      ) : (
+      {currentView === 'welcome' && (
         <Welcome onStart={handleStartMarkup} />
+      )}
+
+      {currentView === 'project-select' && (
+        <div className="welcome-container">
+          <ProjectSelector
+            onProjectSelect={handleProjectSelect}
+            onBack={handleBackToWelcome}
+          />
+        </div>
+      )}
+
+      {currentView === 'markup' && selectedProject && (
+        <Markup
+          mediaItems={mediaItems}
+          selectedProject={selectedProject}
+          onBack={handleBackToProjectSelect}
+        />
       )}
     </div>
   );
