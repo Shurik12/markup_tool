@@ -1,142 +1,128 @@
-import axios from 'axios';
-
-// For production, use relative paths since we're served from Flask
+// API service for the markup tool
 const API_BASE_URL = '/api';
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+class ApiService {
+  constructor() {
+    this.baseUrl = API_BASE_URL;
+  }
 
-export const markupService = {
-  // Health check
-  checkHealth: async () => {
-    try {
-      const response = await api.get('/health');
-      return response.data;
-    } catch (error) {
-      console.error('Health check failed:', error);
-      throw error;
-    }
-  },
+  // Generic request handler
+  async request(endpoint, options = {}) {
+    const url = `${this.baseUrl}${endpoint}`;
+    const defaultOptions = {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    };
 
-  // Fetch all media with markup status
-  getMediaItems: async () => {
-    try {
-      const response = await api.get('/media');
-      return response.data.items || [];
-    } catch (error) {
-      console.error('Error fetching media items:', error);
-      return [];
-    }
-  },
+    const requestOptions = { ...defaultOptions, ...options };
 
-  // Submit emotion markup
-  submitMarkup: async (mediaId, emotion) => {
     try {
-      const response = await api.post('/annotate', {
-        mediaId,
-        tag: emotion
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error submitting markup:', error);
-      throw error;
-    }
-  },
-
-  // Get statistics
-  getStats: async () => {
-    try {
-      const response = await api.get('/stats');
-      return response.data;
-    } catch (error) {
-      console.error('Error fetching stats:', error);
-      return {
-        total_media: 0,
-        total_annotated: 0,
-        pending: 0,
-        completion_rate: 0,
-        emotion_summary: {},
-        type_summary: {}
-      };
-    }
-  },
-
-  // Upload media file
-  uploadMedia: async (file) => {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+      const response = await fetch(url, requestOptions);
       
-      const response = await axios.post('/api/media/upload', formData);
-      return response.data;
-    } catch (error) {
-      console.error('Error uploading media:', error);
-      throw error;
-    }
-  },
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Request failed with status ${response.status}`);
+      }
 
-  // Scan for new files
-  scanFiles: async () => {
-    try {
-      const response = await api.post('/scan');
-      return response.data;
+      return await response.json();
     } catch (error) {
-      console.error('Error scanning files:', error);
-      throw error;
-    }
-  },
-
-  // Reset annotations
-  resetAnnotations: async () => {
-    try {
-      const response = await api.post('/reset');
-      return response.data;
-    } catch (error) {
-      console.error('Error resetting annotations:', error);
-      throw error;
-    }
-  },
-
-  // Export results
-  exportResults: async () => {
-    try {
-      const response = await api.get('/export');
-      return response.data;
-    } catch (error) {
-      console.error('Error exporting results:', error);
-      throw error;
-    }
-  },
-
-  // Get next unannotated media
-  getNextUnannotated: async (currentId) => {
-    try {
-      const response = await api.get('/next', {
-        params: { current_id: currentId }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting next media:', error);
-      throw error;
-    }
-  },
-
-  // Get previous media
-  getPrevious: async (currentId) => {
-    try {
-      const response = await api.get('/prev', {
-        params: { current_id: currentId }
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting previous media:', error);
+      console.error(`API request failed for ${endpoint}:`, error);
       throw error;
     }
   }
-};
 
-export default api;
+  // Health check
+  async checkHealth() {
+    return this.request('/health');
+  }
+
+  // Project methods
+  async getProjects() {
+    return this.request('/projects');
+  }
+
+  async getProjectMedia(projectName) {
+    return this.request(`/projects/${projectName}/media`);
+  }
+
+  async uploadFiles(projectName, files) {
+    const formData = new FormData();
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+
+    return this.request(`/projects/${projectName}/upload`, {
+      method: 'POST',
+      body: formData,
+      headers: {}, // Don't set Content-Type for FormData
+    });
+  }
+
+  async loadFolder(projectName, folderPath) {
+    return this.request(`/projects/${projectName}/load-folder`, {
+      method: 'POST',
+      body: JSON.stringify({ source_folder: folderPath }),
+    });
+  }
+
+  async scanProject(projectName) {
+    return this.request(`/projects/${projectName}/scan`, {
+      method: 'POST',
+    });
+  }
+
+  async resetProjectAnnotations(projectName) {
+    return this.request(`/projects/${projectName}/reset`, {
+      method: 'POST',
+    });
+  }
+
+  async exportProject(projectName) {
+    return this.request(`/projects/${projectName}/export`);
+  }
+
+  async deleteProject(projectName) {
+    return this.request(`/projects/${projectName}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getNextProjectMedia(projectName, currentId = 0) {
+    return this.request(`/projects/${projectName}/next?current_id=${currentId}`);
+  }
+
+  async getPreviousProjectMedia(projectName, currentId) {
+    return this.request(`/projects/${projectName}/prev?current_id=${currentId}`);
+  }
+
+  // Annotation methods
+  async submitAnnotation(annotationData) {
+    return this.request('/annotate', {
+      method: 'POST',
+      body: JSON.stringify(annotationData),
+    });
+  }
+
+  // Stats methods
+  async getStats(projectName = null) {
+    const endpoint = projectName ? `/stats?project=${encodeURIComponent(projectName)}` : '/stats';
+    return this.request(endpoint);
+  }
+
+  // Media methods
+  async getMedia(mediaId) {
+    return this.request(`/media/${mediaId}`);
+  }
+
+  async getMediaFile(mediaId) {
+    return this.request(`/media/${mediaId}/file`);
+  }
+}
+
+// Create a singleton instance
+const apiService = new ApiService();
+
+// Export both the instance and the class for flexibility
+export default apiService;
+export { ApiService };

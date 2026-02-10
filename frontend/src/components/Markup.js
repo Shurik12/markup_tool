@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import apiService from '../services/api';
 
-const Markup = ({ mediaItems, selectedProject, onBack }) => {
+const Markup = ({ mediaItems, selectedProject, onBack, loading: initialLoading }) => {
   const [currentMedia, setCurrentMedia] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedEmotion, setSelectedEmotion] = useState(null);
@@ -15,7 +16,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
     type_summary: {},
     vad_summary: {}
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(initialLoading);
   const [error, setError] = useState('');
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -23,12 +24,20 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
   const [showLoadFolderModal, setShowLoadFolderModal] = useState(false);
   const [loadFolderPath, setLoadFolderPath] = useState('');
 
-  // Load stats on component mount and when mediaItems change
-  useEffect(() => {
-    loadStats();
-  }, [mediaItems, selectedProject]);
+  // Load stats
+  const loadStats = useCallback(async () => {
+    try {
+      const projectName = selectedProject?.project;
+      const statsData = await apiService.getStats(projectName);
+      setStats(statsData);
+    } catch (err) {
+      console.error('Error loading stats:', err);
+      setError('Failed to load statistics');
+      setTimeout(() => setError(''), 3000);
+    }
+  }, [selectedProject]);
 
-  // Set current media when mediaItems or currentIndex changes
+  // Set current media when index changes
   useEffect(() => {
     if (mediaItems.length > 0 && currentIndex < mediaItems.length) {
       const media = mediaItems[currentIndex];
@@ -36,35 +45,23 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
       setSelectedEmotion(media.emotion || null);
       setValence(media.valence !== null && media.valence !== undefined ? media.valence.toString() : '');
       setArousal(media.arousal !== null && media.arousal !== undefined ? media.arousal.toString() : '');
-
-      // Save current index to localStorage
+      
+      // Save current index
       localStorage.setItem('markupCurrentIndex', currentIndex.toString());
     } else {
       setCurrentMedia(null);
     }
   }, [mediaItems, currentIndex]);
 
-  // Load saved index from localStorage
+  // Load saved index and stats on mount
   useEffect(() => {
     const savedIndex = localStorage.getItem('markupCurrentIndex');
     if (savedIndex && parseInt(savedIndex) < mediaItems.length) {
       setCurrentIndex(parseInt(savedIndex));
     }
-  }, [mediaItems.length]);
-
-  const loadStats = async () => {
-    try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const url = projectName ? `/api/stats?project=${encodeURIComponent(projectName)}` : '/api/stats';
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data);
-      }
-    } catch (error) {
-      console.error('Error loading stats:', error);
-    }
-  };
+    
+    loadStats();
+  }, [mediaItems.length, loadStats]);
 
   const handleEmotionSelect = (emotion) => {
     setSelectedEmotion(emotion);
@@ -104,45 +101,31 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
         arousal: arousal !== '' ? parseFloat(arousal) : null
       };
 
-      const response = await fetch('/api/annotate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(annotationData),
-      });
+      const result = await apiService.submitAnnotation(annotationData);
 
-      if (response.ok) {
-        const data = await response.json();
+      // Update current media with new annotation
+      const updatedMedia = {
+        ...currentMedia,
+        emotion: result.result.emotion,
+        valence: result.result.valence,
+        arousal: result.result.arousal,
+        status: 'completed'
+      };
 
-        // Update current media with new annotation
-        const updatedMedia = {
-          ...currentMedia,
-          emotion: data.result.emotion,
-          valence: data.result.valence,
-          arousal: data.result.arousal,
-          status: 'completed'
-        };
+      // Update mediaItems array
+      const updatedMediaItems = [...mediaItems];
+      updatedMediaItems[currentIndex] = updatedMedia;
 
-        // Update mediaItems array
-        const updatedMediaItems = [...mediaItems];
-        updatedMediaItems[currentIndex] = updatedMedia;
+      // Update stats
+      setStats(result.stats);
 
-        // Update stats
-        setStats(data.stats);
-
-        // Move to next item if available
-        if (currentIndex < mediaItems.length - 1) {
-          setCurrentIndex(currentIndex + 1);
-        }
-      } else {
-        const errorData = await response.json();
-        setError(errorData.error || 'Failed to save annotation');
-        setTimeout(() => setError(''), 3000);
+      // Move to next item if available
+      if (currentIndex < mediaItems.length - 1) {
+        setCurrentIndex(currentIndex + 1);
       }
-    } catch (error) {
-      console.error('Error submitting annotation:', error);
-      setError('Network error. Please try again.');
+    } catch (err) {
+      console.error('Error submitting annotation:', err);
+      setError(err.message || 'Failed to save annotation');
       setTimeout(() => setError(''), 3000);
     } finally {
       setLoading(false);
@@ -161,20 +144,6 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
     }
   };
 
-  const handleFinish = () => {
-    // Go to the first unannotated item
-    const unannotatedIndex = mediaItems.findIndex(item =>
-      item.emotion === null || item.valence === null || item.arousal === null
-    );
-
-    if (unannotatedIndex !== -1) {
-      setCurrentIndex(unannotatedIndex);
-    } else {
-      // All items are annotated
-      setCurrentIndex(0);
-    }
-  };
-
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     setSelectedFiles(files);
@@ -182,67 +151,45 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
 
   const handleUploadFiles = async () => {
     if (selectedFiles.length === 0) {
-      alert('Please select files to upload');
+      setError('Please select files to upload');
+      setTimeout(() => setError(''), 3000);
       return;
     }
 
     setUploading(true);
-
-    const formData = new FormData();
-    selectedFiles.forEach(file => {
-      formData.append('files', file);
-    });
+    setError('');
 
     try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const response = await fetch(`/api/projects/${projectName}/upload`, {
-        method: 'POST',
-        body: formData
-      });
+      const projectName = selectedProject?.project;
+      const result = await apiService.uploadFiles(projectName, selectedFiles);
 
-      if (response.ok) {
-        const data = await response.json();
+      // Build detailed message
+      let message = `✅ Successfully added files to project "${projectName}"\n\n`;
+      message += `📊 Results:\n`;
+      message += `• Uploaded: ${result.total_uploaded || result.uploaded?.length || 0} file(s)\n`;
 
-        // Build detailed message
-        let message = `✅ Successfully added files to project "${projectName}"\n\n`;
-        message += `📊 Results:\n`;
-        message += `• Uploaded: ${data.total_uploaded || data.uploaded?.length || 0} file(s)\n`;
+      if (result.skipped && result.skipped.length > 0) {
+        const duplicates = result.skipped.filter(f => f.status === 'duplicate');
+        const invalid = result.skipped.filter(f => f.status === 'skipped');
 
-        if (data.skipped && data.skipped.length > 0) {
-          const duplicates = data.skipped.filter(f => f.status === 'duplicate');
-          const invalid = data.skipped.filter(f => f.status === 'skipped');
-
-          if (duplicates.length > 0) {
-            message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
-          }
-          if (invalid.length > 0) {
-            message += `• Skipped invalid: ${invalid.length} file(s)\n`;
-          }
-
-          // Show first few duplicates if any
-          if (duplicates.length > 0 && duplicates.length <= 5) {
-            message += `\n📁 Duplicate files (already exist in project):\n`;
-            duplicates.forEach(file => {
-              message += `  • ${file.filename}\n`;
-            });
-          } else if (duplicates.length > 5) {
-            message += `\n📁 ${duplicates.length} duplicate files (already exist in project)\n`;
-          }
+        if (duplicates.length > 0) {
+          message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
         }
-
-        alert(message);
-        setShowUploadModal(false);
-        setSelectedFiles([]);
-
-        // Reload the page to refresh media items
-        window.location.reload();
-      } else {
-        const error = await response.json();
-        alert(`❌ Error: ${error.error || 'Failed to upload files'}`);
+        if (invalid.length > 0) {
+          message += `• Skipped invalid: ${invalid.length} file(s)\n`;
+        }
       }
-    } catch (error) {
-      console.error('Error uploading files:', error);
-      alert('❌ Network error. Failed to upload files');
+
+      alert(message);
+      setShowUploadModal(false);
+      setSelectedFiles([]);
+
+      // Reload the page to refresh media items
+      window.location.reload();
+    } catch (err) {
+      console.error('Error uploading files:', err);
+      setError(err.message || 'Failed to upload files');
+      setTimeout(() => setError(''), 3000);
     } finally {
       setUploading(false);
     }
@@ -250,109 +197,75 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
 
   const handleLoadFolder = async () => {
     if (!loadFolderPath.trim()) {
-      alert('Please enter a folder path');
+      setError('Please enter a folder path');
+      setTimeout(() => setError(''), 3000);
       return;
     }
 
     try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const response = await fetch(`/api/projects/${projectName}/load-folder`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          source_folder: loadFolderPath
-        })
-      });
+      const projectName = selectedProject?.project;
+      const result = await apiService.loadFolder(projectName, loadFolderPath);
 
-      if (response.ok) {
-        const data = await response.json();
+      // Build detailed message
+      let message = `✅ Successfully added files to project "${projectName}" from folder\n\n`;
+      message += `📊 Results:\n`;
+      message += `• Loaded: ${result.total_loaded || result.loaded?.length || 0} file(s)\n`;
 
-        // Build detailed message
-        let message = `✅ Successfully added files to project "${projectName}" from folder\n\n`;
-        message += `📊 Results:\n`;
-        message += `• Loaded: ${data.total_loaded || data.loaded?.length || 0} file(s)\n`;
+      if (result.skipped && result.skipped.length > 0) {
+        const duplicates = result.skipped.filter(f => f.status === 'duplicate');
 
-        if (data.skipped && data.skipped.length > 0) {
-          const duplicates = data.skipped.filter(f => f.status === 'duplicate');
-
-          if (duplicates.length > 0) {
-            message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
-          }
-
-          // Show first few duplicates if any
-          if (duplicates.length > 0 && duplicates.length <= 5) {
-            message += `\n📁 Duplicate files (already exist in project):\n`;
-            duplicates.forEach(file => {
-              message += `  • ${file.filename}\n`;
-            });
-          } else if (duplicates.length > 5) {
-            message += `\n📁 ${duplicates.length} duplicate files (already exist in project)\n`;
-          }
+        if (duplicates.length > 0) {
+          message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
         }
-
-        alert(message);
-        setShowLoadFolderModal(false);
-        setLoadFolderPath('');
-
-        // Reload the page to refresh media items
-        window.location.reload();
-      } else {
-        const error = await response.json();
-        alert(`❌ Error: ${error.error || 'Failed to load folder'}`);
       }
-    } catch (error) {
-      console.error('Error loading folder:', error);
-      alert('❌ Network error. Failed to load folder');
+
+      alert(message);
+      setShowLoadFolderModal(false);
+      setLoadFolderPath('');
+
+      // Reload the page to refresh media items
+      window.location.reload();
+    } catch (err) {
+      console.error('Error loading folder:', err);
+      setError(err.message || 'Failed to load folder');
+      setTimeout(() => setError(''), 3000);
     }
   };
 
   const handleScanFolder = async () => {
     try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const response = await fetch(`/api/projects/${projectName}/scan`, {
-        method: 'POST'
-      });
+      const projectName = selectedProject?.project;
+      const result = await apiService.scanProject(projectName);
+      alert(`Found ${result.files.length} new files in project folder`);
 
-      if (response.ok) {
-        const data = await response.json();
-        alert(`Found ${data.files.length} new files in project folder`);
-
-        // Reload the page to refresh media items
-        window.location.reload();
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to scan folder');
-      }
-    } catch (error) {
-      console.error('Error scanning folder:', error);
-      alert('Failed to scan folder');
+      // Reload the page to refresh media items
+      window.location.reload();
+    } catch (err) {
+      console.error('Error scanning folder:', err);
+      setError(err.message || 'Failed to scan folder');
+      setTimeout(() => setError(''), 3000);
     }
   };
 
   const handleExport = async () => {
     try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const response = await fetch(`/api/projects/${projectName}/export`);
+      const projectName = selectedProject?.project;
+      const result = await apiService.exportProject(projectName);
 
-      if (response.ok) {
-        const data = await response.json();
-
-        // Create and download CSV file
-        const blob = new Blob([data.csv], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `markup-export-${projectName}-${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      }
-    } catch (error) {
-      console.error('Error exporting data:', error);
-      alert('Failed to export data');
+      // Create and download CSV file
+      const blob = new Blob([result.csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `markup-export-${projectName}-${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Error exporting data:', err);
+      setError(err.message || 'Failed to export data');
+      setTimeout(() => setError(''), 3000);
     }
   };
 
@@ -362,24 +275,16 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
     }
 
     try {
-      const projectName = selectedProject?.name || selectedProject?.project;
-      const response = await fetch(`/api/projects/${projectName}/reset`, {
-        method: 'POST'
-      });
+      const projectName = selectedProject?.project;
+      await apiService.resetProjectAnnotations(projectName);
+      alert('Annotations reset successfully');
 
-      if (response.ok) {
-        const data = await response.json();
-        alert(`Reset ${data.reset_count} annotations`);
-
-        // Reload the page to refresh data
-        window.location.reload();
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to reset annotations');
-      }
-    } catch (error) {
-      console.error('Error resetting annotations:', error);
-      alert('Failed to reset annotations');
+      // Reload the page to refresh data
+      window.location.reload();
+    } catch (err) {
+      console.error('Error resetting annotations:', err);
+      setError(err.message || 'Failed to reset annotations');
+      setTimeout(() => setError(''), 3000);
     }
   };
 
@@ -401,7 +306,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
     return (
       <div className="welcome-container">
         <div className="welcome-content">
-          <h1 className="welcome-title">Project: {selectedProject?.name || selectedProject?.project}</h1>
+          <h1 className="welcome-title">Project: {selectedProject?.project}</h1>
           <p className="welcome-subtitle">
             This project has no media files yet.
           </p>
@@ -441,7 +346,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
           ← Back to Projects
         </button>
         <div className="markup-title">
-          Media Markup - Project: {selectedProject?.name || selectedProject?.project}
+          Media Markup - Project: {selectedProject?.project}
         </div>
         <div className="progress-info">
           {currentIndex + 1} / {mediaItems.length} • {stats.completion_rate.toFixed(1)}% Complete
@@ -700,7 +605,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
             border: '1px solid #333'
           }}>
             <h3 style={{ color: '#fff', marginBottom: '1rem' }}>
-              Upload Files to {selectedProject?.name || selectedProject?.project}
+              Upload Files to {selectedProject?.project}
             </h3>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -803,7 +708,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
             border: '1px solid #333'
           }}>
             <h3 style={{ color: '#fff', marginBottom: '1rem' }}>
-              Load Folder to {selectedProject?.name || selectedProject?.project}
+              Load Folder to {selectedProject?.project}
             </h3>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -814,7 +719,7 @@ const Markup = ({ mediaItems, selectedProject, onBack }) => {
                 fontSize: '0.9rem'
               }}>
                 Source Folder Path
-              </label>
+            </label>
               <input
                 type="text"
                 value={loadFolderPath}
