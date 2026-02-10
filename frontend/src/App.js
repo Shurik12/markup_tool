@@ -1,135 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import Welcome from './components/Welcome';
 import Markup from './components/Markup';
 import ProjectSelector from './components/ProjectSelector';
+import { useAppState } from './hooks/useAppState';
 import './styles/App.css';
 
 function App() {
-  const [currentView, setCurrentView] = useState('welcome');
-  const [selectedProject, setSelectedProject] = useState(null);
-  const [mediaItems, setMediaItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingMedia, setLoadingMedia] = useState(false);
-  const [error, setError] = useState('');
-  const [restoringState, setRestoringState] = useState(false);
+  const {
+    currentView,
+    selectedProject,
+    mediaItems,
+    loading,
+    error,
+    restoringState,
+    handleStartMarkup,
+    handleProjectSelect,
+    handleBackToProjectSelect,
+    handleBackToWelcome,
+    setError
+  } = useAppState();
 
-  // Load saved state
-  useEffect(() => {
-    const restoreSavedState = async () => {
-      try {
-        const savedView = localStorage.getItem('markupApp_currentView');
-        const savedProject = localStorage.getItem('markupApp_selectedProject');
-        const savedTime = localStorage.getItem('markupApp_savedTime');
-
-        if (savedView && savedTime) {
-          const hoursDiff = (Date.now() - parseInt(savedTime)) / (1000 * 60 * 60);
-          if (hoursDiff < 1) { // Less than 1 hour old
-            setRestoringState(true);
-            
-            // Restore the view
-            setCurrentView(savedView);
-            
-            // If we were on markup view, restore project and media
-            if (savedView === 'markup' && savedProject) {
-              const project = JSON.parse(savedProject);
-              setSelectedProject(project);
-              
-              // Load project media
-              await loadProjectMedia(project.project);
-            }
-            
-            setRestoringState(false);
-          } else {
-            clearSavedState();
-          }
-        }
-      } catch (error) {
-        console.error('Error reading saved state:', error);
-        clearSavedState();
-        setRestoringState(false);
-      }
-    };
-
-    restoreSavedState();
-  }, []);
-
-  // Save state when view changes
-  useEffect(() => {
-    if (currentView !== 'welcome') {
-      localStorage.setItem('markupApp_currentView', currentView);
-      localStorage.setItem('markupApp_savedTime', Date.now().toString());
+  // Clear error after 5 seconds
+  React.useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        setError('');
+      }, 5000);
+      return () => clearTimeout(timer);
     }
-  }, [currentView]);
-
-  // Save project when it changes
-  useEffect(() => {
-    if (selectedProject && currentView === 'markup') {
-      localStorage.setItem('markupApp_selectedProject', JSON.stringify(selectedProject));
-      localStorage.setItem('markupApp_savedTime', Date.now().toString());
-    }
-  }, [selectedProject, currentView]);
-
-  const clearSavedState = () => {
-    localStorage.removeItem('markupApp_currentView');
-    localStorage.removeItem('markupApp_selectedProject');
-    localStorage.removeItem('markupApp_savedTime');
-    localStorage.removeItem('markupCurrentIndex');
-  };
-
-  const loadProjectMedia = async (projectName) => {
-    setLoadingMedia(true);
-    setError('');
-
-    try {
-      const response = await fetch(`/api/projects/${projectName}/media`);
-      if (response.ok) {
-        const data = await response.json();
-        setMediaItems(data.items || []);
-      } else {
-        throw new Error('Failed to load project media');
-      }
-    } catch (err) {
-      console.error('Error loading project media:', err);
-      setError('Failed to load project media. Please try again.');
-      setCurrentView('project-select');
-      clearSavedState();
-    } finally {
-      setLoadingMedia(false);
-    }
-  };
-
-  const handleStartMarkup = () => {
-    setCurrentView('project-select');
-  };
-
-  const handleProjectSelect = async (project) => {
-    setSelectedProject(project);
-    setCurrentView('markup');
-    
-    // Load project media
-    setLoadingMedia(true);
-    await loadProjectMedia(project.project);
-  };
-
-  const handleBackToProjectSelect = () => {
-    // Don't clear everything, just go back to project select
-    setSelectedProject(null);
-    setMediaItems([]);
-    setCurrentView('project-select');
-    
-    // Update localStorage
-    localStorage.setItem('markupApp_currentView', 'project-select');
-    localStorage.setItem('markupApp_savedTime', Date.now().toString());
-    localStorage.removeItem('markupApp_selectedProject');
-    localStorage.removeItem('markupCurrentIndex');
-  };
-
-  const handleBackToWelcome = () => {
-    clearSavedState();
-    setSelectedProject(null);
-    setMediaItems([]);
-    setCurrentView('welcome');
-  };
+  }, [error, setError]);
 
   // Show loading while restoring state
   if (restoringState) {
@@ -141,8 +40,8 @@ function App() {
     );
   }
 
-  // Show loading while loading media for markup view
-  if (currentView === 'markup' && loadingMedia) {
+  // Show loading while loading media
+  if (currentView === 'markup' && loading && mediaItems.length === 0) {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
@@ -171,7 +70,24 @@ function App() {
           mediaItems={mediaItems}
           selectedProject={selectedProject}
           onBack={handleBackToProjectSelect}
+          loading={loading}
         />
+      )}
+
+      {error && (
+        <div className="error-toast">
+          <div className="error-content">
+            <span className="error-icon">⚠️</span>
+            <span className="error-text">{error}</span>
+            <button 
+              className="error-close" 
+              onClick={() => setError('')}
+              aria-label="Close error message"
+            >
+              ×
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

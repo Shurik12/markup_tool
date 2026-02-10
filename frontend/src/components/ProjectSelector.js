@@ -1,15 +1,18 @@
 import React, { useState, useEffect } from 'react';
+import apiService from '../services/api';
 
 const ProjectSelector = ({ onProjectSelect, onBack }) => {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('select'); // 'select' or 'upload'
+  const [activeTab, setActiveTab] = useState('select');
   const [selectedProject, setSelectedProject] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [loadFolderPath, setLoadFolderPath] = useState('');
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     loadProjects();
@@ -17,15 +20,24 @@ const ProjectSelector = ({ onProjectSelect, onBack }) => {
 
   const loadProjects = async () => {
     try {
-      const response = await fetch('/api/projects');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
-      }
-    } catch (error) {
-      console.error('Error loading projects:', error);
+      setLoading(true);
+      const data = await apiService.getProjects();
+      setProjects(data.projects || []);
+    } catch (err) {
+      console.error('Error loading projects:', err);
+      setError('Failed to load projects. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const showAlert = (message, type = 'info') => {
+    if (type === 'success') {
+      setSuccessMessage(message);
+      setTimeout(() => setSuccessMessage(''), 5000);
+    } else {
+      setError(message);
+      setTimeout(() => setError(''), 5000);
     }
   };
 
@@ -36,99 +48,76 @@ const ProjectSelector = ({ onProjectSelect, onBack }) => {
 
   const handleUploadFiles = async () => {
     if (selectedFiles.length === 0) {
-      alert('Please select files to upload');
+      showAlert('Please select files to upload', 'error');
       return;
     }
 
     let projectName = '';
     if (isCreatingNew) {
       if (!newProjectName.trim()) {
-        alert('Please enter a project name');
+        showAlert('Please enter a project name', 'error');
         return;
       }
-      projectName = newProjectName;
+      projectName = newProjectName.trim();
     } else {
       if (!selectedProject) {
-        alert('Please select a project');
+        showAlert('Please select a project', 'error');
         return;
       }
       projectName = selectedProject;
     }
 
     setUploadingFiles(true);
-
-    const formData = new FormData();
-    selectedFiles.forEach(file => {
-      formData.append('files', file);
-    });
+    setError('');
+    setSuccessMessage('');
 
     try {
-      const response = await fetch(`/api/projects/${projectName}/upload`, {
-        method: 'POST',
-        body: formData
-      });
+      const result = await apiService.uploadFiles(projectName, selectedFiles);
 
-      if (response.ok) {
-        const data = await response.json();
-
-        // Build detailed message
-        let message = '';
-        if (isCreatingNew) {
-          message = `✅ Successfully created project "${projectName}"\n\n`;
-        } else {
-          message = `✅ Successfully updated project "${projectName}"\n\n`;
-        }
-
-        message += `📊 Results:\n`;
-        message += `• Uploaded: ${data.total_uploaded || data.uploaded?.length || 0} file(s)\n`;
-
-        if (data.skipped && data.skipped.length > 0) {
-          const duplicates = data.skipped.filter(f => f.status === 'duplicate');
-          const invalid = data.skipped.filter(f => f.status === 'skipped');
-
-          if (duplicates.length > 0) {
-            message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
-          }
-          if (invalid.length > 0) {
-            message += `• Skipped invalid: ${invalid.length} file(s)\n`;
-          }
-
-          // Show first few duplicates if any
-          if (duplicates.length > 0 && duplicates.length <= 5) {
-            message += `\n📁 Duplicate files (already exist in project):\n`;
-            duplicates.forEach(file => {
-              message += `  • ${file.filename}\n`;
-            });
-          } else if (duplicates.length > 5) {
-            message += `\n📁 ${duplicates.length} duplicate files (already exist in project)\n`;
-          }
-        }
-
-        alert(message);
-        setSelectedFiles([]);
-        setNewProjectName('');
-        setSelectedProject('');
-        setIsCreatingNew(false);
-
-        // Reload projects list
-        await loadProjects();
-
-        // Auto-select the project
-        const projectData = projects.find(p => p.project === projectName) || {
-          project: projectName,
-          name: projectName,
-          media_count: data.total || (data.total_uploaded || 0),
-          annotated_count: 0,
-          last_updated: new Date().toISOString()
-        };
-        onProjectSelect(projectData);
+      // Build detailed message
+      let message = '';
+      if (isCreatingNew) {
+        message = `✅ Successfully created project "${projectName}"\n\n`;
       } else {
-        const error = await response.json();
-        alert(`❌ Error: ${error.error || 'Failed to upload files'}`);
+        message = `✅ Successfully updated project "${projectName}"\n\n`;
       }
-    } catch (error) {
-      console.error('Error uploading files:', error);
-      alert('❌ Network error. Failed to upload files');
+
+      message += `📊 Results:\n`;
+      message += `• Uploaded: ${result.total_uploaded || result.uploaded?.length || 0} file(s)\n`;
+
+      if (result.skipped && result.skipped.length > 0) {
+        const duplicates = result.skipped.filter(f => f.status === 'duplicate');
+        const invalid = result.skipped.filter(f => f.status === 'skipped');
+
+        if (duplicates.length > 0) {
+          message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
+        }
+        if (invalid.length > 0) {
+          message += `• Skipped invalid: ${invalid.length} file(s)\n`;
+        }
+      }
+
+      showAlert(message, 'success');
+      setSelectedFiles([]);
+      setNewProjectName('');
+      setSelectedProject('');
+      setIsCreatingNew(false);
+
+      // Reload projects list
+      await loadProjects();
+
+      // Auto-select the project
+      const projectData = projects.find(p => p.project === projectName) || {
+        project: projectName,
+        name: projectName,
+        media_count: result.total || (result.total_uploaded || 0),
+        annotated_count: 0,
+        last_updated: new Date().toISOString()
+      };
+      onProjectSelect(projectData);
+    } catch (err) {
+      console.error('Error uploading files:', err);
+      showAlert(`❌ Error: ${err.message || 'Failed to upload files'}`, 'error');
     } finally {
       setUploadingFiles(false);
     }
@@ -136,93 +125,68 @@ const ProjectSelector = ({ onProjectSelect, onBack }) => {
 
   const handleLoadFolder = async () => {
     if (!loadFolderPath.trim()) {
-      alert('Please enter a folder path');
+      showAlert('Please enter a folder path', 'error');
       return;
     }
 
     let projectName = '';
     if (isCreatingNew) {
       if (!newProjectName.trim()) {
-        alert('Please enter a project name');
+        showAlert('Please enter a project name', 'error');
         return;
       }
-      projectName = newProjectName;
+      projectName = newProjectName.trim();
     } else {
       if (!selectedProject) {
-        alert('Please select a project');
+        showAlert('Please select a project', 'error');
         return;
       }
       projectName = selectedProject;
     }
 
     try {
-      const response = await fetch(`/api/projects/${projectName}/load-folder`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          source_folder: loadFolderPath
-        })
-      });
+      const result = await apiService.loadFolder(projectName, loadFolderPath);
 
-      if (response.ok) {
-        const data = await response.json();
-
-        // Build detailed message
-        let message = '';
-        if (isCreatingNew) {
-          message = `✅ Successfully created project "${projectName}" from folder\n\n`;
-        } else {
-          message = `✅ Successfully added files to project "${projectName}" from folder\n\n`;
-        }
-
-        message += `📊 Results:\n`;
-        message += `• Loaded: ${data.total_loaded || data.loaded?.length || 0} file(s)\n`;
-
-        if (data.skipped && data.skipped.length > 0) {
-          const duplicates = data.skipped.filter(f => f.status === 'duplicate');
-
-          if (duplicates.length > 0) {
-            message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
-          }
-
-          // Show first few duplicates if any
-          if (duplicates.length > 0 && duplicates.length <= 5) {
-            message += `\n📁 Duplicate files (already exist in project):\n`;
-            duplicates.forEach(file => {
-              message += `  • ${file.filename}\n`;
-            });
-          } else if (duplicates.length > 5) {
-            message += `\n📁 ${duplicates.length} duplicate files (already exist in project)\n`;
-          }
-        }
-
-        alert(message);
-        setLoadFolderPath('');
-        setNewProjectName('');
-        setSelectedProject('');
-        setIsCreatingNew(false);
-
-        // Reload projects list
-        await loadProjects();
-
-        // Auto-select the project
-        const projectData = projects.find(p => p.project === projectName) || {
-          project: projectName,
-          name: projectName,
-          media_count: data.total || (data.total_loaded || 0),
-          annotated_count: 0,
-          last_updated: new Date().toISOString()
-        };
-        onProjectSelect(projectData);
+      // Build detailed message
+      let message = '';
+      if (isCreatingNew) {
+        message = `✅ Successfully created project "${projectName}" from folder\n\n`;
       } else {
-        const error = await response.json();
-        alert(`❌ Error: ${error.error || 'Failed to load folder'}`);
+        message = `✅ Successfully added files to project "${projectName}" from folder\n\n`;
       }
-    } catch (error) {
-      console.error('Error loading folder:', error);
-      alert('❌ Network error. Failed to load folder');
+
+      message += `📊 Results:\n`;
+      message += `• Loaded: ${result.total_loaded || result.loaded?.length || 0} file(s)\n`;
+
+      if (result.skipped && result.skipped.length > 0) {
+        const duplicates = result.skipped.filter(f => f.status === 'duplicate');
+
+        if (duplicates.length > 0) {
+          message += `• Skipped duplicates: ${duplicates.length} file(s)\n`;
+        }
+      }
+
+      showAlert(message, 'success');
+      setLoadFolderPath('');
+      setNewProjectName('');
+      setSelectedProject('');
+      setIsCreatingNew(false);
+
+      // Reload projects list
+      await loadProjects();
+
+      // Auto-select the project
+      const projectData = projects.find(p => p.project === projectName) || {
+        project: projectName,
+        name: projectName,
+        media_count: result.total || (result.total_loaded || 0),
+        annotated_count: 0,
+        last_updated: new Date().toISOString()
+      };
+      onProjectSelect(projectData);
+    } catch (err) {
+      console.error('Error loading folder:', err);
+      showAlert(`❌ Error: ${err.message || 'Failed to load folder'}`, 'error');
     }
   };
 
@@ -241,8 +205,73 @@ const ProjectSelector = ({ onProjectSelect, onBack }) => {
       padding: '2rem',
       borderRadius: '8px',
       maxWidth: '800px',
-      width: '100%'
+      width: '100%',
+      position: 'relative'
     }}>
+      {/* Success Message */}
+      {successMessage && (
+        <div style={{
+          position: 'absolute',
+          top: '-60px',
+          left: '0',
+          right: '0',
+          backgroundColor: '#1a5a2a',
+          color: '#fff',
+          padding: '10px',
+          borderRadius: '4px',
+          textAlign: 'center',
+          whiteSpace: 'pre-line',
+          zIndex: 100
+        }}>
+          {successMessage}
+          <button 
+            onClick={() => setSuccessMessage('')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#fff',
+              marginLeft: '10px',
+              cursor: 'pointer',
+              fontSize: '16px'
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Error Message */}
+      {error && (
+        <div style={{
+          position: 'absolute',
+          top: error.includes('✅') ? '-60px' : '10px',
+          left: '0',
+          right: '0',
+          backgroundColor: '#5a1a1a',
+          color: '#ff9999',
+          padding: '10px',
+          borderRadius: '4px',
+          textAlign: 'center',
+          whiteSpace: 'pre-line',
+          zIndex: 100
+        }}>
+          {error}
+          <button 
+            onClick={() => setError('')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#ff9999',
+              marginLeft: '10px',
+              cursor: 'pointer',
+              fontSize: '16px'
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h2 style={{ color: '#fff', margin: 0 }}>Projects</h2>
         <button
